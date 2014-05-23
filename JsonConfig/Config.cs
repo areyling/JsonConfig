@@ -80,6 +80,7 @@ namespace JsonConfig
 			// scan ALL linked assemblies and merge their default configs while
 			// giving the entry assembly top priority in merge
 			var entryAssembly = Assembly.GetEntryAssembly();
+
 			var assemblies = AppDomain.CurrentDomain.GetAssemblies();
 			foreach (var assembly in assemblies.Where(assembly => !assembly.Equals(entryAssembly))) {
 				Default = Merger.Merge(GetDefaultConfig(assembly), Default);
@@ -250,6 +251,61 @@ namespace JsonConfig
 			var stream = assembly.GetManifestResourceStream (dconf_resource);
 			string default_json = new StreamReader(stream).ReadToEnd ();
 			return default_json;
+		}
+
+		private static IEnumerable<Assembly> GetAssemblies(bool loadReferencedAssemblies, bool loadBaseDirectoryAssemblies)
+		{
+			//modified from http://stackoverflow.com/a/2384679/202870
+			var assemblies = AppDomain.CurrentDomain.GetAssemblies().ToList();
+			var toLoad = new List<AssemblyName>();
+
+			if (loadBaseDirectoryAssemblies && Assembly.GetEntryAssembly() != null)
+			{
+				var refs = Assembly.GetEntryAssembly()
+								   .GetReferencedAssemblies()
+								   .Where(r => assemblies.FirstOrDefault(a => a.GetName() == r) == null);
+				toLoad.AddRange(refs);
+			}
+
+			if (loadReferencedAssemblies)
+			{
+				var loadedPaths = assemblies.Select(a => a.Location).ToArray();
+				var files = Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "*.dll");
+				var dlls = files.Where(r => !loadedPaths.Contains(r, StringComparer.InvariantCultureIgnoreCase))
+								.Select(AssemblyName.GetAssemblyName)
+								.Where(assemblyName => !toLoad.Contains(assemblyName));
+				toLoad.AddRange(dlls);
+			}
+
+			toLoad.ForEach(assemblyName => assemblies.Add(AppDomain.CurrentDomain.Load(assemblyName)));
+			return assemblies;
+		}
+
+		///  <summary>
+		///  Re-initializes <see cref="Default"/> config.
+		///  </summary>
+		///  <param name="loadReferencedAssemblies">If true, loads all referenced assemblies not already loaded
+		///		before loading default configs.</param>
+		/// <param name="loadBaseDirectoryAssemblies">If true, loads all assemblies from .dll files within the
+		///		AppDomain.CurrentDomain.BaseDirectory not already loaded.
+		///		<seealso cref="AppDomain.BaseDirectory"/></param>
+		/// <remarks>
+		///  See http://stackoverflow.com/a/10284950/202870 and http://stackoverflow.com/a/2479400/202870
+		///  </remarks>
+		public static void ReloadDefault(bool loadReferencedAssemblies, bool loadBaseDirectoryAssemblies)
+		{
+			Default = new ConfigObject();
+
+			var entryAssembly = Assembly.GetEntryAssembly();
+			var assemblies = GetAssemblies(loadReferencedAssemblies, loadBaseDirectoryAssemblies);
+			foreach (var assembly in assemblies.Where(assembly => !assembly.Equals(entryAssembly)))
+			{
+				Default = Merger.Merge(GetDefaultConfig(assembly), Default);
+			}
+
+			if (entryAssembly != null) { Default = Merger.Merge(GetDefaultConfig(entryAssembly), Default); }
+
+			global_config = null; //force re-merge since Default has changed
 		}
 	}
 }
